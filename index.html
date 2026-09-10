@@ -407,6 +407,12 @@ toggleSystemAudioBtn.addEventListener('click', ()=>{
   toggleSystemAudioBtn.setAttribute('aria-pressed', String(on));
   toggleSystemAudioBtn.textContent = on ? '🖥️ SON ORDINATEUR ACTIVÉ' : '🖥️ CAPTER SON ORDINATEUR';
 });
+if(!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function'){
+  toggleSystemAudioBtn.disabled = true;
+  toggleSystemAudioBtn.title = "Non disponible sur ce navigateur (réservé aux ordinateurs). Le micro seul captera aussi le son ambiant.";
+  toggleSystemAudioBtn.textContent = '🖥️ Indisponible sur mobile';
+  toggleSystemAudioBtn.style.opacity = '0.5';
+}
 const downloadAudioBtn = document.getElementById('downloadAudioBtn');
 const downloadTranscriptBtn = document.getElementById('downloadTranscriptBtn');
 const transcribeBtn = document.getElementById('transcribeBtn');
@@ -449,6 +455,9 @@ async function buildRecordingStream(captureSystem){
   let connected = false;
 
   if(captureSystem){
+    if(!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function'){
+      throw new Error("Le partage du son de l'ordinateur n'est pas disponible sur ce navigateur (fonctionnalité réservée aux ordinateurs — Chrome/Edge sur PC ou Mac). Décochez « Capter aussi le son de l'ordinateur » et utilisez le micro seul : il captera aussi le son ambiant si un ordinateur/haut-parleur est à proximité.");
+    }
     try{
       displayStream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true});
       const sysAudioTracks = displayStream.getAudioTracks();
