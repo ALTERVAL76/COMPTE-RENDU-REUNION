@@ -229,6 +229,12 @@ body.simulator-active .wrap > *:not(header):not(.app-tabs):not(#simulatorPane){d
     <input type="text" id="meetingTitle" placeholder="Titre de la réunion (ex. Point hebdo équipe commerciale)">
     <input type="text" id="meetingParticipants" placeholder="Participants (ex. Marie, Julien, Sofia — améliore l'attribution des tâches)">
   </div>
+  <div class="meta-row">
+    <label style="display:flex;align-items:center;gap:8px;flex:1;font-size:13px;color:#667085;">📅 Date de la réunion
+      <input type="datetime-local" id="meetingDate" style="flex:1;">
+    </label>
+    <div id="saveStatus" style="flex:1;font-size:12px;color:#667085;display:flex;align-items:center;justify-content:flex-end;gap:6px;">💾 Non enregistré</div>
+  </div>
 
   <div class="stats">
     <div class="stat-card"><div class="num" id="statDuration">00:00</div><div class="lbl">Durée</div></div>
@@ -354,11 +360,15 @@ body.simulator-active .wrap > *:not(header):not(.app-tabs):not(#simulatorPane){d
 
   <section>
     <div class="section-head"><h2>Historique des comptes-rendus</h2><span class="count" id="historyCount">0 réunion</span></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px 0;">
+      <button class="ghost icon-btn" id="historyFolderBtn" type="button"><span class="ico">📁</span><span class="lbl">Choisir le dossier</span></button>
+      <span id="historyFileStatus" class="note" style="margin:0;">Historique automatique : dossier non configuré</span>
+    </div>
     <div id="historyList"></div>
   </section>
 
   <div id="simulatorPane"><iframe id="simulatorFrame" title="Simulateur VALPAK intégré"></iframe></div>
-  <footer>Enregistrement local · les données ne sont envoyées qu'au moment des étapes « Transcrire » et « Générer le compte-rendu ». L'historique est stocké uniquement sur cet ordinateur (aucun envoi).</footer>
+  <footer>Enregistrement local · les données ne sont envoyées qu'au moment des étapes « Transcrire » et « Générer le compte-rendu ». L'historique est enregistré automatiquement dans le dossier MeetingAI choisi. Une première connexion du dossier est nécessaire sur chaque poste.</footer>
 </div>
 <div id="printArea"></div>
 
@@ -906,7 +916,11 @@ Si une section est vide, écris "<li>Aucun élément identifié</li>". Reste fid
     ['exportPdfBtn','exportWordBtn','exportExcelBtn','saveHistoryBtn'].forEach(id=>{
       document.getElementById(id).disabled = false;
     });
-    saveToHistory(meetingTitle, participants, text2);
+    // Sauvegarde automatique immédiate dans l'historique permanent du navigateur.
+    // On mémorise l'intégralité de la réunion, pas seulement le résumé.
+    if(!window.__meetingHistoryId) window.__meetingHistoryId=String(Date.now());
+    saveCurrentMeetingToHistory();
+    autoSaveDraft();
   }catch(err){
     summaryEl.innerHTML = `<p>Erreur lors de la génération du compte-rendu : ${err.message}</p>`;
     summaryEl.classList.add('show');
@@ -957,7 +971,69 @@ function parseActionItems(){
 
 function meetingFileBase(){
   const title = (document.getElementById('meetingTitle').value.trim() || 'reunion').replace(/[^a-z0-9]+/gi,'-').toLowerCase();
-  return `${title}_${new Date().toISOString().slice(0,10)}`;
+  const d = document.getElementById('meetingDate')?.value || new Date().toISOString();
+  const datePart = d.slice(0,10);
+  return `${title}_${datePart}`;
+}
+
+function formatMeetingDate(value){
+  if(!value) return new Date().toLocaleString('fr-FR');
+  const d = new Date(value);
+  return isNaN(d) ? new Date().toLocaleString('fr-FR') : d.toLocaleString('fr-FR');
+}
+
+const DRAFT_KEY = 'reunion-console-current-draft-v3';
+function collectMeetingData(){
+  return {
+    app:'console-de-reunion', version:3,
+    clientName:document.getElementById('clientName')?.value.trim() || '',
+    clientAddress:document.getElementById('clientAddress')?.value.trim() || '',
+    title:document.getElementById('meetingTitle')?.value.trim() || '',
+    participants:document.getElementById('meetingParticipants')?.value.trim() || '',
+    meetingDate:document.getElementById('meetingDate')?.value || '',
+    transcript:document.getElementById('transcript')?.value || '',
+    summaryHtml:document.getElementById('summary')?.innerHTML || '',
+    attachments:attachments || [],
+    simulatorState:window.__valpakIntegrationState || null,
+    simulatorResult:window.__valpakIntegrationResult || null,
+    simulatorClient:window.__valpakIntegrationClient || null,
+    savedAt:new Date().toISOString()
+  };
+}
+function setSaveStatus(text, ok=false){
+  const el=document.getElementById('saveStatus');
+  if(el){ el.textContent=(ok?'✅ ':'💾 ')+text; el.style.color=ok?'#16803a':'#667085'; }
+}
+function autoSaveDraft(){
+  try{
+    const data=collectMeetingData();
+    if(data.transcript || data.summaryHtml || data.title || data.clientName || data.participants){
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+      setSaveStatus('Brouillon local mis à jour');
+    }
+  }catch(e){ console.warn('Auto-sauvegarde locale impossible:',e); }
+}
+function restoreDraft(){
+  try{
+    const raw=localStorage.getItem(DRAFT_KEY); if(!raw) return false;
+    const data=JSON.parse(raw);
+    if(!data || data.app!=='console-de-reunion') return false;
+    document.getElementById('clientName').value=data.clientName||'';
+    document.getElementById('clientAddress').value=data.clientAddress||'';
+    document.getElementById('meetingTitle').value=data.title||'';
+    document.getElementById('meetingParticipants').value=data.participants||'';
+    if(document.getElementById('meetingDate')) document.getElementById('meetingDate').value=data.meetingDate||'';
+    transcriptEl.value=data.transcript||'';
+    const wc=transcriptEl.value.trim()?transcriptEl.value.trim().split(/\s+/).length:0;
+    wordCountEl.textContent=wc+' mot'+(wc>1?'s':'');
+    document.getElementById('statWords').textContent=wc;
+    const sum=document.getElementById('summary'); sum.innerHTML=data.summaryHtml||'';
+    if(data.summaryHtml){sum.classList.add('show'); ['exportPdfBtn','exportWordBtn','exportExcelBtn','saveHistoryBtn'].forEach(id=>document.getElementById(id).disabled=false); updateSummaryStats();}
+    attachments=data.attachments||[]; renderAttachments();
+    window.__valpakIntegrationState=data.simulatorState||null; window.__valpakIntegrationResult=data.simulatorResult||null; window.__valpakIntegrationClient=data.simulatorClient||null;
+    setSaveStatus('Brouillon restauré');
+    return true;
+  }catch(e){ console.warn('Restauration du brouillon impossible:',e); return false; }
 }
 
 // --- Export PDF (impression) ---
@@ -965,7 +1041,7 @@ document.getElementById('exportPdfBtn').addEventListener('click', ()=>{
   const printArea = document.getElementById('printArea');
   const title = document.getElementById('meetingTitle').value.trim() || 'Réunion sans titre';
   const participants = document.getElementById('meetingParticipants').value.trim();
-  const dateStr = new Date().toLocaleString('fr-FR');
+  const dateStr = formatMeetingDate(document.getElementById('meetingDate')?.value);
   printArea.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;">
       <div>
@@ -993,7 +1069,7 @@ document.getElementById('exportPdfBtn').addEventListener('click', ()=>{
 document.getElementById('exportWordBtn').addEventListener('click', ()=>{
   const title = document.getElementById('meetingTitle').value.trim() || 'Réunion sans titre';
   const participants = document.getElementById('meetingParticipants').value.trim();
-  const dateStr = new Date().toLocaleString('fr-FR');
+  const dateStr = formatMeetingDate(document.getElementById('meetingDate')?.value);
   const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
   <head><meta charset="utf-8"><title>${title}</title>
 </head>
@@ -1157,32 +1233,42 @@ async function saveObjectToDisk(dataObj, suggestedName){
 }
 
 document.getElementById('saveHistoryBtn').addEventListener('click', async ()=>{
-  const clientName = document.getElementById('clientName').value.trim();
-  const clientAddress = document.getElementById('clientAddress').value.trim();
-  const title = document.getElementById('meetingTitle').value.trim() || 'Réunion sans titre';
-  const participants = document.getElementById('meetingParticipants').value.trim();
-  const summaryHtml = document.getElementById('summary').innerHTML;
-
-  saveToHistory(title, participants, summaryHtml, clientName, clientAddress); // garde aussi un accès rapide local
-
-  const dataObj = {
-    app: 'console-de-reunion', version: 2,
-    clientName, clientAddress,
-    title, participants, date: new Date().toISOString(),
-    transcript: transcriptEl.value,
-    summaryHtml,
-    attachments,
-    simulatorState: window.__valpakIntegrationState || null,
-    simulatorResult: window.__valpakIntegrationResult || null,
-    simulatorClient: window.__valpakIntegrationClient || null
-  };
-  const btn = document.getElementById('saveHistoryBtn');
-  const old = btn.innerHTML;
-  const saved = await saveObjectToDisk(dataObj, `${meetingFileBase()}.json`);
-  if(saved){
-    btn.innerHTML = '<span class="ico">✅</span><span class="lbl">Enregistré</span>';
-    setTimeout(()=>{ btn.innerHTML = old; }, 1500);
+  const btn=document.getElementById('saveHistoryBtn');
+  const old=btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML='<span class="ico">⏳</span><span class="lbl">Enregistrement…</span>';
+  try{
+    const dataObj=collectMeetingData();
+    const title=dataObj.title || 'Réunion sans titre';
+    if(!dataObj.meetingDate){
+      dataObj.meetingDate=new Date().toISOString().slice(0,16);
+      document.getElementById('meetingDate').value=dataObj.meetingDate;
+    }
+    // Historique local + fichier JSON réellement enregistré sur le disque.
+    saveToHistory(title,dataObj.participants,dataObj.summaryHtml,dataObj.clientName,dataObj.clientAddress);
+    localStorage.setItem(DRAFT_KEY,JSON.stringify(dataObj));
+    const saved=await saveObjectToDisk(dataObj,`${meetingFileBase()}.json`);
+    if(saved){
+      setSaveStatus('Fichier enregistré',true);
+      btn.innerHTML='<span class="ico">✅</span><span class="lbl">Enregistré</span>';
+      setTimeout(()=>{btn.innerHTML=old;},1800);
+    }else{
+      setSaveStatus('Enregistrement annulé');
+      btn.innerHTML=old;
+    }
+  }catch(err){
+    console.error(err);
+    alert('Impossible d’enregistrer la réunion : '+err.message);
+    setSaveStatus('Erreur d’enregistrement');
+    btn.innerHTML=old;
+  }finally{
+    btn.disabled=false;
   }
+});
+
+// Sauvegarde automatique du brouillon dans le navigateur, sans clé API.
+['clientName','clientAddress','meetingTitle','meetingParticipants','meetingDate','transcript'].forEach(id=>{
+  const el=document.getElementById(id); if(el) el.addEventListener('input',autoSaveDraft);
 });
 
 // --- Ouvrir un compte-rendu précédemment enregistré ---
@@ -1195,6 +1281,7 @@ function loadMeetingData(jsonText){
   document.getElementById('clientAddress').value = data.clientAddress || '';
   document.getElementById('meetingTitle').value = data.title || '';
   document.getElementById('meetingParticipants').value = data.participants || '';
+  if(document.getElementById('meetingDate')) document.getElementById('meetingDate').value = data.meetingDate || data.date || '';
   transcriptEl.value = data.transcript || '';
   const wc = transcriptEl.value.trim().split(/\s+/).filter(Boolean).length;
   wordCountEl.textContent = wc + ' mots';
@@ -1218,6 +1305,11 @@ function loadMeetingData(jsonText){
 
   document.getElementById('statDuration').textContent = '--:--';
   statusText.textContent = `Compte-rendu chargé : ${data.title || 'sans titre'}`;
+  window.__meetingHistoryId = data.historyId || data.id || String(Date.now());
+  try{ localStorage.setItem(DRAFT_KEY, JSON.stringify({...data, savedAt:new Date().toISOString()})); }catch(e){}
+  // Un fichier ouvert est immédiatement intégré à l'historique local.
+  if(data.transcript || data.summaryHtml){ saveCurrentMeetingToHistory(); }
+  setSaveStatus('Fichier chargé et ajouté à l’historique',true);
 }
 
 async function openMeetingFile(){
@@ -1245,82 +1337,273 @@ async function openMeetingFile(){
   inp.click();
 }
 document.getElementById('openFileBtn').addEventListener('click', openMeetingFile);
+const historyFolderBtn=document.getElementById('historyFolderBtn'); if(historyFolderBtn) historyFolderBtn.addEventListener('click',chooseHistoryFolder);
 
-// --- Historique local (persiste entre sessions sur cet ordinateur) ---
-const HISTORY_KEY = 'reunion-console-history';
+// --- HISTORIQUE AUTOMATIQUE DES RÉUNIONS ---
+// L'historique est indépendant du fichier HTML : il est conservé dans le navigateur.
+// Chaque compte-rendu est enregistré automatiquement dès qu'il est généré ou modifié.
+const HISTORY_KEY = 'reunion-console-history-v4';
+const HISTORY_LEGACY_KEY = 'reunion-console-history';
+const HISTORY_FILE_NAME = 'Historique_MeetingAI.json';
+const HISTORY_HANDLE_DB = 'meetingai-file-db-v1';
+const HISTORY_HANDLE_STORE = 'handles';
+window.__meetingHistoryMemory = [];
+window.__historyFileHandle = null;
+window.__historyFileReady = false;
+
+function normalizeMeetingDate(value){
+  if(!value) return new Date().toISOString().slice(0,16);
+  if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return value;
+  const d=new Date(value);
+  return isNaN(d) ? new Date().toISOString().slice(0,16) : d.toISOString().slice(0,16);
+}
+
+function normalizeHistoryRecord(h){
+  return {
+    id:String(h.id||Date.now()+Math.random()), title:h.title||'Réunion sans titre',
+    participants:h.participants||'', clientName:h.clientName||'', clientAddress:h.clientAddress||'',
+    meetingDate:normalizeMeetingDate(h.meetingDate||h.date), date:h.date||new Date().toISOString(),
+    transcript:h.transcript||'', summaryHtml:h.summaryHtml||'', attachments:h.attachments||[],
+    simulatorState:h.simulatorState||null, simulatorResult:h.simulatorResult||null,
+    simulatorClient:h.simulatorClient||null, updatedAt:h.updatedAt||h.date||new Date().toISOString()
+  };
+}
+
+function localHistory(){
+  try{
+    const raw=localStorage.getItem(HISTORY_KEY);
+    if(raw){ const h=JSON.parse(raw); if(Array.isArray(h)) return h.map(normalizeHistoryRecord); }
+    const legacy=JSON.parse(localStorage.getItem(HISTORY_LEGACY_KEY)||'[]');
+    if(Array.isArray(legacy)&&legacy.length) return legacy.map(normalizeHistoryRecord).slice(0,100);
+  }catch(e){ console.warn('Lecture historique local impossible:',e); }
+  return [];
+}
+
 function loadHistory(){
-  try{ return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }catch(e){ return []; }
+  if(window.__historyFileReady) return window.__meetingHistoryMemory.slice();
+  return localHistory();
 }
-function saveToHistory(title, participants, summaryHtml, clientName, clientAddress){
-  const history = loadHistory();
-  history.unshift({
-    id: Date.now(),
-    title, participants,
-    clientName: clientName || '', clientAddress: clientAddress || '',
-    date: new Date().toISOString(),
-    transcript: document.getElementById('transcript').value,
-    summaryHtml
+
+function persistLocalHistory(history){
+  try{ localStorage.setItem(HISTORY_KEY,JSON.stringify(history.slice(0,100))); return true; }
+  catch(e){ try{ localStorage.setItem(HISTORY_KEY,JSON.stringify(history.slice(0,30))); return true; }catch(e2){ return false; } }
+}
+
+function persistHistory(history){
+  const clean=history.slice(0,100).map(normalizeHistoryRecord);
+  window.__meetingHistoryMemory=clean;
+  persistLocalHistory(clean);
+  if(window.__historyFileHandle){ writeHistoryFile(clean).catch(e=>console.warn('Écriture fichier historique impossible:',e)); }
+  return true;
+}
+
+function openHistoryDB(){
+  return new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window)) return resolve(null);
+    const req=indexedDB.open(HISTORY_HANDLE_DB,1);
+    req.onupgradeneeded=()=>req.result.createObjectStore(HISTORY_HANDLE_STORE);
+    req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error);
   });
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 100)));
+}
+async function storeHistoryHandle(handle){
+  try{ const db=await openHistoryDB(); if(!db)return; await new Promise((res,rej)=>{const tx=db.transaction(HISTORY_HANDLE_STORE,'readwrite');tx.objectStore(HISTORY_HANDLE_STORE).put(handle,'folder');tx.oncomplete=res;tx.onerror=()=>rej(tx.error);}); }catch(e){console.warn(e);}
+}
+async function getHistoryHandle(){
+  try{ const db=await openHistoryDB(); if(!db)return null; return await new Promise((res,rej)=>{const tx=db.transaction(HISTORY_HANDLE_STORE,'readonly');const r=tx.objectStore(HISTORY_HANDLE_STORE).get('folder');r.onsuccess=()=>res(r.result||null);r.onerror=()=>rej(r.error);}); }catch(e){return null;}
+}
+async function verifyHistoryPermission(handle,write=false){
+  if(!handle || !handle.queryPermission) return true;
+  const opts={mode:write?'readwrite':'read'};
+  if(await handle.queryPermission(opts)==='granted') return true;
+  if(await handle.requestPermission(opts)==='granted') return true;
+  return false;
+}
+async function readHistoryFile(handle){
+  try{
+    const file=await (await handle.getFileHandle(HISTORY_FILE_NAME,{create:false})).getFile();
+    const txt=await file.text(); const arr=JSON.parse(txt); return Array.isArray(arr)?arr.map(normalizeHistoryRecord):[];
+  }catch(e){ return null; }
+}
+async function writeHistoryFile(history){
+  if(!window.__historyFileHandle) return false;
+  const ok=await verifyHistoryPermission(window.__historyFileHandle,true); if(!ok) return false;
+  const fh=await window.__historyFileHandle.getFileHandle(HISTORY_FILE_NAME,{create:true});
+  const w=await fh.createWritable(); await w.write(JSON.stringify(history.slice(0,100),null,2)); await w.close();
+  setHistoryFileStatus('Historique synchronisé dans Historique_MeetingAI.json',true); return true;
+}
+function setHistoryFileStatus(text,ok=false){
+  const el=document.getElementById('historyFileStatus'); if(!el)return;
+  el.textContent=text; el.style.color=ok?'#188038':'';
+}
+async function chooseHistoryFolder(){
+  if(!('showDirectoryPicker' in window)){
+    alert('Votre navigateur ne permet pas la sauvegarde automatique dans un dossier. Utilisez Google Chrome ou Microsoft Edge pour cette fonction.'); return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({mode:'readwrite'});
+    if(!(await verifyHistoryPermission(handle,true))) return;
+    window.__historyFileHandle=handle; await storeHistoryHandle(handle);
+    const existing=await readHistoryFile(handle);
+    if(existing){
+      window.__meetingHistoryMemory=existing.slice(0,100);
+    }else{
+      const old=localHistory(); window.__meetingHistoryMemory=old.slice(0,100); await writeHistoryFile(window.__meetingHistoryMemory);
+    }
+    window.__historyFileReady=true; persistLocalHistory(window.__meetingHistoryMemory); renderHistory();
+    setHistoryFileStatus('Dossier connecté · historique automatique actif',true);
+  }catch(e){ if(e.name!=='AbortError') alert('Impossible de connecter le dossier : '+e.message); }
+}
+async function initHistoryFile(){
+  const saved=await getHistoryHandle();
+  if(saved){
+    try{
+      if(await verifyHistoryPermission(saved,false)){
+        const existing=await readHistoryFile(saved);
+        if(existing){ window.__historyFileHandle=saved; window.__meetingHistoryMemory=existing.slice(0,100); window.__historyFileReady=true; persistLocalHistory(window.__meetingHistoryMemory); setHistoryFileStatus('Dossier connecté · historique automatique actif',true); renderHistory(); return; }
+      }
+    }catch(e){ console.warn(e); }
+  }
+  window.__meetingHistoryMemory=localHistory();
   renderHistory();
 }
+
+function currentMeetingRecord(){
+  const data=collectMeetingData();
+  const now=new Date().toISOString();
+  return {
+    id:window.__meetingHistoryId || String(Date.now()),
+    title:data.title||'Réunion sans titre',
+    participants:data.participants||'',
+    clientName:data.clientName||'',
+    clientAddress:data.clientAddress||'',
+    meetingDate:normalizeMeetingDate(data.meetingDate),
+    date:data.meetingDate ? new Date(data.meetingDate).toISOString() : now,
+    transcript:data.transcript||'',
+    summaryHtml:data.summaryHtml||'',
+    attachments:data.attachments||[],
+    simulatorState:data.simulatorState||null,
+    simulatorResult:data.simulatorResult||null,
+    simulatorClient:data.simulatorClient||null,
+    updatedAt:now
+  };
+}
+
+function saveCurrentMeetingToHistory(){
+  const record=currentMeetingRecord();
+  // Une réunion sans contenu n'est pas ajoutée à l'historique.
+  if(!record.transcript.trim() && !record.summaryHtml.trim()) return false;
+  const history=loadHistory();
+  const index=history.findIndex(h=>String(h.id)===String(window.__meetingHistoryId));
+  if(index>=0){
+    history[index]=record;
+  }else{
+    history.unshift(record);
+  }
+  window.__meetingHistoryId=record.id;
+  const ok=persistHistory(history);
+  renderHistory();
+  return ok;
+}
+
+function saveToHistory(title, participants, summaryHtml, clientName, clientAddress){
+  // Compatibilité avec les anciennes parties du code : on utilise maintenant
+  // l'enregistrement complet de la réunion.
+  return saveCurrentMeetingToHistory();
+}
+
 function deleteFromHistory(id){
-  const history = loadHistory().filter(h=>h.id !== id);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  const history=loadHistory().filter(h=>String(h.id)!==String(id));
+  persistHistory(history);
+  if(String(window.__meetingHistoryId)===String(id)) window.__meetingHistoryId=null;
   renderHistory();
 }
+
+function openHistoryMeeting(h){
+  window.__meetingHistoryId=h.id;
+  document.getElementById('clientName').value=h.clientName||'';
+  document.getElementById('clientAddress').value=h.clientAddress||'';
+  document.getElementById('meetingTitle').value=h.title||'';
+  document.getElementById('meetingParticipants').value=h.participants||'';
+  if(document.getElementById('meetingDate')) document.getElementById('meetingDate').value=normalizeMeetingDate(h.meetingDate||h.date);
+  transcriptEl.value=h.transcript||'';
+  const wc=transcriptEl.value.trim()?transcriptEl.value.trim().split(/\s+/).length:0;
+  wordCountEl.textContent=wc+' mot'+(wc>1?'s':'');
+  document.getElementById('statWords').textContent=wc;
+  const summaryEl=document.getElementById('summary');
+  summaryEl.innerHTML=h.summaryHtml||'';
+  if(h.summaryHtml){
+    summaryEl.classList.add('show');
+    ['exportPdfBtn','exportWordBtn','exportExcelBtn','saveHistoryBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=false;});
+    updateSummaryStats();
+  }else summaryEl.classList.remove('show');
+  attachments=h.attachments||[];
+  renderAttachments();
+  window.__valpakIntegrationState=h.simulatorState||null;
+  window.__valpakIntegrationResult=h.simulatorResult||null;
+  window.__valpakIntegrationClient=h.simulatorClient||null;
+  try{ localStorage.setItem(DRAFT_KEY,JSON.stringify({...h,savedAt:new Date().toISOString()})); }catch(e){}
+  setSaveStatus('Réunion restaurée depuis l’historique',true);
+  statusText.textContent='Réunion chargée : '+(h.title||'sans titre');
+  summaryEl.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 function renderHistory(){
-  const history = loadHistory();
-  const list = document.getElementById('historyList');
-  document.getElementById('historyCount').textContent = history.length + (history.length>1 ? ' réunions' : ' réunion');
-  list.innerHTML = '';
+  const history=loadHistory();
+  const count=document.getElementById('historyCount');
+  const list=document.getElementById('historyList');
+  if(!list) return;
+  if(count) count.textContent=history.length+(history.length>1?' réunions':' réunion');
+  list.innerHTML='';
+  if(!history.length){
+    list.innerHTML='<div class="history-empty">Aucun compte-rendu enregistré pour le moment.<br><small>Les prochains comptes-rendus seront ajoutés automatiquement ici.</small></div>';
+    return;
+  }
   history.forEach(h=>{
-    const div = document.createElement('div');
-    div.className = 'history-item';
-    const d = new Date(h.date).toLocaleString('fr-FR');
-    div.innerHTML = `
-      <div><div class="hi-title">${h.title}</div><div class="hi-date">${d}</div></div>
+    const div=document.createElement('div');
+    div.className='history-item';
+    const dateValue=h.meetingDate||h.date||h.updatedAt;
+    const d=formatMeetingDate(dateValue);
+    const client=h.clientName?`<div class="hi-client">${escapeHtml(h.clientName)}</div>`:'';
+    const hasTranscript=!!(h.transcript&&h.transcript.trim());
+    const hasSummary=!!(h.summaryHtml&&h.summaryHtml.trim());
+    div.innerHTML=`
+      <div><div class="hi-title">${escapeHtml(h.title||'Réunion sans titre')}</div>${client}<div class="hi-date">${escapeHtml(d)} · ${hasSummary?'Compte-rendu ✓':'Brouillon'}${hasTranscript?' · Transcription ✓':''}</div></div>
       <div class="hi-actions">
-        <button class="ghost" data-act="view">Voir</button>
-        <button class="ghost" data-act="word">Word</button>
+        <button class="ghost" data-act="view">Ouvrir</button>
+        <button class="ghost" data-act="word" ${hasSummary?'':'disabled'}>Word</button>
         <button class="ghost" data-act="del">Suppr.</button>
       </div>`;
-    div.querySelector('[data-act="view"]').addEventListener('click', ()=>{
-      document.getElementById('clientName').value = h.clientName || '';
-      document.getElementById('clientAddress').value = h.clientAddress || '';
-      document.getElementById('meetingTitle').value = h.title;
-      document.getElementById('meetingParticipants').value = h.participants || '';
-      transcriptEl.value = h.transcript || '';
-      const summaryEl = document.getElementById('summary');
-      summaryEl.innerHTML = h.summaryHtml;
-      summaryEl.classList.add('show');
-      ['exportPdfBtn','exportWordBtn','exportExcelBtn','saveHistoryBtn'].forEach(id=>{
-        document.getElementById(id).disabled = false;
-      });
-      updateSummaryStats();
-      summaryEl.scrollIntoView({behavior:'smooth'});
+    div.querySelector('[data-act="view"]').addEventListener('click',()=>openHistoryMeeting(h));
+    div.querySelector('[data-act="word"]').addEventListener('click',()=>{
+      if(!hasSummary) return;
+      const html=`<html><head><meta charset="utf-8"><title>${escapeHtml(h.title||'Réunion')}</title></head><body style="font-family:Calibri, sans-serif;">
+        <table width="100%" style="border-collapse:collapse;"><tr><td style="vertical-align:top;"><h1 style="margin:0;">${escapeHtml(h.title||'Réunion')}</h1><p style="color:#666;margin:4px 0 0;">${escapeHtml(d)}${h.participants?' · Participants : '+escapeHtml(h.participants):''}</p></td>
+        <td style="vertical-align:top;text-align:right;width:160px;"><img src="data:image/png;base64,${PRINT_LOGO_B64}" style="height:46px;"></td></tr></table>${h.summaryHtml}</body></html>`;
+      const blob=new Blob(['\\ufeff',html],{type:'application/msword'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(h.title||'reunion').replace(/[^a-z0-9]+/gi,'-').toLowerCase()}.doc`;a.click();URL.revokeObjectURL(url);
     });
-    div.querySelector('[data-act="word"]').addEventListener('click', ()=>{
-      const html = `<html><head><meta charset="utf-8"><title>${h.title}</title>
-</head><body style="font-family:Calibri, sans-serif;">
-        <table width="100%" style="border-collapse:collapse;"><tr>
-          <td style="vertical-align:top;"><h1 style="margin:0;">${h.title}</h1><p style="color:#666;margin:4px 0 0;">${d}${h.participants ? ' · Participants : '+h.participants : ''}</p></td>
-          <td style="vertical-align:top;text-align:right;width:160px;"><img src="data:image/png;base64,${PRINT_LOGO_B64}" style="height:46px;"></td>
-        </tr></table>
-        ${h.summaryHtml}</body></html>`;
-      const blob = new Blob(['\ufeff', html], {type:'application/msword'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `${h.title.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}.doc`;
-      a.click(); URL.revokeObjectURL(url);
-    });
-    div.querySelector('[data-act="del"]').addEventListener('click', ()=>{
-      if(confirm('Supprimer ce compte-rendu de l\'historique ?')) deleteFromHistory(h.id);
-    });
+    div.querySelector('[data-act="del"]').addEventListener('click',()=>{if(confirm('Supprimer ce compte-rendu de l\'historique ?')) deleteFromHistory(h.id);});
     list.appendChild(div);
   });
 }
-renderHistory();
+
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+// Sauvegarde automatique de l'état courant quand on quitte la page.
+window.addEventListener('beforeunload',()=>{
+  try{
+    autoSaveDraft();
+    const s=document.getElementById('summary');
+    if(s && s.classList.contains('show') && s.innerHTML.trim()) saveCurrentMeetingToHistory();
+  }catch(e){}
+});
+
+if(document.getElementById('meetingDate') && !document.getElementById('meetingDate').value){
+  document.getElementById('meetingDate').value=new Date().toISOString().slice(0,16);
+}
+// Au démarrage : restauration du brouillon en cours puis affichage automatique
+// de l'historique complet des réunions déjà réalisées.
+restoreDraft();
+initHistoryFile();
 </script>
 <script id="meeting-valpak-integration">
 (function(){
@@ -1481,7 +1764,7 @@ renderHistory();
 document.getElementById('sendTranscriptToSimBtn').addEventListener('click',function(){var text=document.getElementById('transcript')?.value||'';if(!text.trim())return;sendText(text);syncClientToSimulator();this.disabled=true;this.textContent='✓ Analyse / synchronisation effectuée';});
   window.addEventListener('message',function(ev){var d=ev.data||{};if(d.type==='valpak-detected'){var filtered=(d.results||[]).filter(function(r){return !pendingValpakParams.some(function(p){return p.cle===r.cle;});});if(filtered.length)addDetected(filtered);}if(d.type==='valpak-state'){window.__valpakIntegrationState=d.state||null;window.__valpakIntegrationResult=d.result||null;window.__valpakIntegrationClient={nom:d.nom||'',site:d.site||'',commercial:d.commercial||''};var st=d.state||{};var force=[];pendingValpakParams.forEach(function(p){if(authoritativeUntil[p.cle] && Date.now()<authoritativeUntil[p.cle] && Number(st[p.cle])!==Number(p.valeur)) force.push(p);});if(force.length) setTimeout(function(){sendToSim({type:'valpak-apply-params',results:force});},80);}if(d.type==='valpak-state-loaded')setIntegrationStatus('<strong>✓ Simulation synchronisée</strong>.')});
   var tr=document.getElementById('transcript');if(tr){tr.addEventListener('input',function(){var b=document.getElementById('sendTranscriptToSimBtn');if(b)b.disabled=tr.value.trim().length===0;});}
-  var saveBtn=document.getElementById('saveHistoryBtn');if(saveBtn)saveBtn.addEventListener('click',function(){sendToSim({type:'valpak-get-state'})},true);
+  var saveBtn=document.getElementById('saveHistoryBtn');if(saveBtn)saveBtn.addEventListener('click',function(){sendToSim({type:'valpak-get-state'});},false);
   var toolbar=document.querySelector('.export-toolbar');if(toolbar){var b=document.createElement('button');b.className='ghost icon-btn';b.type='button';b.innerHTML='<span class="ico">📊</span><span class="lbl">Insérer simulation VALPAK</span>';b.addEventListener('click',function(){sendToSim({type:'valpak-get-state'});setTimeout(function(){var r=window.__valpakIntegrationResult;if(!r){alert('Aucun résultat VALPAK disponible. Ouvrez le simulateur et calculez les gains.');return}var block='<h3>Simulation VALPAK</h3><ul><li><strong>Coût actuel :</strong> '+Math.round(r.totalActuel).toLocaleString('fr-FR')+' € / an</li><li><strong>Avec VALPAK :</strong> '+Math.round(r.totalValpak).toLocaleString('fr-FR')+' € / an</li><li><strong>Gain annuel estimé :</strong> '+Math.round(r.gain).toLocaleString('fr-FR')+' €</li><li><strong>ROI :</strong> '+(r.roi?r.roi+' mois':'—')+'</li></ul>';var sum=document.getElementById('summary');if(sum){sum.innerHTML=(sum.innerHTML||'')+block;sum.classList.add('show')}alert('Simulation VALPAK insérée dans le compte-rendu.')},350)});toolbar.appendChild(b)}
   document.getElementById('openFileBtn')?.addEventListener('click',function(){setTimeout(function(){lastSentTranscript='';sendText(document.getElementById('transcript')?.value||'')},700)});
 })();
